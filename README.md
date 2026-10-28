@@ -38,6 +38,40 @@ Install the Python dependencies in the Python environment used with COMSOL:
 python -m pip install -r requirements.txt
 ```
 
+## Running on an SSH node with tmux
+
+For long simulations on a remote node, run the workflow inside a `tmux`
+session on that node so an SSH disconnect does not close the terminal running
+the simulation. Make sure `tmux` is available on the node, then connect and
+start a named session:
+
+```bash
+tmux new -s comsol-run
+```
+
+Inside tmux, start a workflow as usual, for example:
+
+```bash
+python ga_optimize.py
+```
+
+To leave it running and return to the remote shell, press the default tmux
+detach key sequence: **Ctrl+b**, then release both keys and press **d**. You
+can then disconnect from SSH; the tmux session and its process remain on the
+node.
+
+After reconnecting to the same node, list sessions and reattach:
+
+```bash
+tmux ls
+tmux attach-session -t comsol-run
+```
+
+Use the same workflow for `comsol_run.py` or `ga_optimize_difference.py`.
+Detaching does not stop the simulation; to stop it, reattach and interrupt the
+command normally. tmux does not protect a process from the node being rebooted,
+shut down, or reclaimed by a job scheduler.
+
 ## Run a workflow
 
 Run commands from the repository root so the scripts can find their
