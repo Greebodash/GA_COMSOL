@@ -48,9 +48,9 @@ from utils.ga_utils import (
 )
 
 
-CONFIG_FILE = "ga_xmon_parameters.md"
+CONFIG_FILE = "ga_optimize_parameters.md"
 
-# Example Objective section for ga_parameters.md:
+# Example Objective section for ga_optimize_parameters.md:
 #
 # ## Objective
 # - objective_type: q_factor
@@ -74,7 +74,7 @@ CONFIG_FILE = "ga_xmon_parameters.md"
 # - objective_type: custom_expression
 # - objective_expression: peak_transmission * q_factor
 #
-OUTPUT_CSV = "ga_xmon_results.csv"
+OUTPUT_CSV = "ga_results.csv"
 SPECTRA_DIR = "spectra"
 CACHE_VERSION = "q-spectrum-v2"
 FAILURE_FITNESS = -1e30
@@ -107,7 +107,7 @@ def parse_markdown_config(filename):
     Expected:
 
     ## Model
-    - input_file: SLR/Xmon_template.mph
+    - input_file: models/model.mph
     - evaluation_tag: gev1
     - temporary_table_tag: ga_temp_table
         require_min_points=False,

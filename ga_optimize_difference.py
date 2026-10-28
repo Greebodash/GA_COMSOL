@@ -30,8 +30,8 @@ from utils.ga_utils import (
 )
 
 
-CONFIG_FILE = "ga_xmon_difference_parameters.md"
-OUTPUT_CSV = "ga_xmon_difference_results_v2.csv"
+CONFIG_FILE = "ga_optimize_difference_parameters.md"
+OUTPUT_CSV = "ga_difference_results.csv"
 SPECTRA_DIR = "spectra_difference"
 CACHE_VERSION = "difference-spectrum-v2"
 FAILURE_FITNESS = -1e30

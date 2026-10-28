@@ -8,13 +8,13 @@ comparing two models, and plotting generated spectra.
 ```text
 .
 ├── comsol_run.py                       # Run one COMSOL model/evaluation
-├── ga_xmon.py                          # Optimize one model's spectrum
-├── ga_xmon_difference.py               # Optimize the difference between two models
+├── ga_optimize.py                      # Optimize one model's spectrum
+├── ga_optimize_difference.py           # Optimize the difference between two models
 ├── plot_spectra.py                     # Plot spectrum CSV files
 ├── comsol_parameters.md                # Single-solve settings and parameters
-├── ga_xmon_parameters.md               # Single-model optimization settings
-├── ga_xmon_difference_parameters.md    # Two-model optimization settings
-├── SLR/    # Directory with COMSOL files
+├── ga_optimize_parameters.md           # Single-model optimization settings
+├── ga_optimize_difference_parameters.md # Two-model optimization settings
+├── models/                             # Local COMSOL models (not included)
 ├── utils/
 │   ├── comsol_utils.py                 # COMSOL table/evaluation helpers
 │   └── ga_utils.py                     # Shared optimization/spectrum helpers
@@ -60,27 +60,27 @@ appended to the configured CSV filename.
 ### Optimize one model
 
 Set the input model, objective, and parameter bounds in
-[`ga_xmon_parameters.md`](ga_xmon_parameters.md), then run:
+[`ga_optimize_parameters.md`](ga_optimize_parameters.md), then run:
 
 ```bash
-python ga_xmon.py
+python ga_optimize.py
 ```
 
 The optimization writes its results CSV and individual spectrum CSVs to the
-locations set in the script (`ga_xmon_results.csv` and `spectra/` by default).
+locations set in the script (`ga_results.csv` and `spectra/` by default).
 
 ### Optimize the difference between two models
 
 Set the reference and sample model paths, objective, and parameter bounds in
-[`ga_xmon_difference_parameters.md`](ga_xmon_difference_parameters.md), then
+[`ga_optimize_difference_parameters.md`](ga_optimize_difference_parameters.md), then
 run:
 
 ```bash
-python ga_xmon_difference.py
+python ga_optimize_difference.py
 ```
 
 This workflow writes the optimization results and comparison spectra to
-`ga_xmon_difference_results_v2.csv` and `spectra_difference/` by default.
+`ga_difference_results.csv` and `spectra_difference/` by default.
 
 ### Plot CSV data
 

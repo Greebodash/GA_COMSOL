@@ -8,7 +8,7 @@ bounds are in `Optimization Parameters`; values held constant belong in
 
 ## Model
 
-- input_file: SLR/Xmon_template.mph
+- input_file: models/model.mph
 - evaluation_tag: gev1
 - temporary_table_tag: ga_temp_table
 - save_first_simulation_output: true

@@ -8,8 +8,8 @@ single-model optimization template.
 
 ## Model
 
-- reference_file: SLR/Xmon_template.mph
-- sample_file: SLR/Xmon_template_TMD.mph
+- reference_file: models/reference.mph
+- sample_file: models/sample.mph
 - evaluation_tag: gev1
 - temporary_table_tag_reference: difference_reference_table
 - temporary_table_tag_sample: difference_sample_table
