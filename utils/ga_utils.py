@@ -55,7 +55,7 @@ def set_fixed_parameters(model, fixed_parameters):
     if not fixed_parameters:
         return
 
-    from comsol_utils import set_model_parameter
+    from utils.comsol_utils import set_model_parameter
 
     available = set(model.parameters())
     for parameter in fixed_parameters:
@@ -86,7 +86,7 @@ def extract_fresh_table(
     print_table=False,
 ):
     """Extract a clean, finite, frequency-sorted COMSOL spectrum."""
-    from comsol_utils import extract_table
+    from utils.comsol_utils import extract_table
 
     frequency, transmission = extract_table(
         model,

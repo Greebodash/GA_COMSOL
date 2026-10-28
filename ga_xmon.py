@@ -33,7 +33,7 @@ import numpy as np
 import pygad
 from scipy.signal import find_peaks
 
-from ga_utils import (
+from utils.ga_utils import (
     create_gene_spaces,
     extract_fresh_table,
     make_cache_key,

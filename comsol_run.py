@@ -12,6 +12,10 @@ import mph
 
 
 CONFIG_FILE = "comsol_parameters.md"
+LOG_DIR = Path("logs")
+SPECTRA_DIR = Path("spectra")
+
+LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -19,7 +23,8 @@ logging.basicConfig(
     handlers=[
         logging.StreamHandler(sys.stdout),
         logging.FileHandler(
-            f"comsolrun_app_{datetime.now().strftime('%Y%m%d_%H%M_%f')}.log",
+            LOG_DIR
+            / f"comsolrun_app_{datetime.now().strftime('%Y%m%d_%H%M_%f')}.log",
             encoding="utf-8",
         ),
     ],
@@ -207,6 +212,7 @@ def set_comsol_parameters(model, parameters):
 
 
 def save_evaluation_csv(filename, frequency, transmission):
+    Path(filename).parent.mkdir(parents=True, exist_ok=True)
     with open(filename, "w", newline="", encoding="utf-8") as output_file:
         writer = csv.writer(output_file)
         writer.writerow(["frequency_thz", "transmission"])
@@ -215,6 +221,7 @@ def save_evaluation_csv(filename, frequency, transmission):
 
 
 def run(config_file=CONFIG_FILE):
+    SPECTRA_DIR.mkdir(parents=True, exist_ok=True)
     config = parse_markdown_config(config_file)
     model_config = config["model"]
     input_file = str(model_config["input_file"])
@@ -244,7 +251,7 @@ def run(config_file=CONFIG_FILE):
         model.solve()
         logger.info("COMSOL solve completed.")
 
-        from comsol_utils import extract_table
+        from utils.comsol_utils import extract_table
 
         for evaluation_tag in evaluation_tags:
             logger.info("Extracting evaluation tag: %s", evaluation_tag)
