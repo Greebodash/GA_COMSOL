@@ -27,7 +27,6 @@ PREVIEW_SECTION = "python preview"
 @dataclass(frozen=True)
 class MobilityWorkflow:
     config: Dict[str, Any]
-    sweep: Dict[str, Any]
     preview: Dict[str, Any]
 
 
@@ -71,13 +70,6 @@ def load_workflow(
     config = parse_markdown_config(filename)
     sweep, preview = _read_extra_sections(filename)
 
-    start = _finite_number(sweep, "Vg_start")
-    step = _finite_number(sweep, "Vg_step")
-    finish = _finite_number(sweep, "Vg_finish")
-    if step <= 0:
-        raise ValueError("'Vg_step' must be greater than zero.")
-    if finish < start:
-        raise ValueError("'Vg_finish' must be greater than or equal to Vg_start.")
 
     plot_file = preview.get("plot_file")
     if not isinstance(plot_file, str) or not plot_file.strip():
@@ -112,13 +104,13 @@ def load_workflow(
             "Missing COMSOL mobility parameter(s): "
             + ", ".join(sorted(missing))
         )
-    for name in ("Vg_start", "Vg_step", "Vg_finish"):
-        if _parameter_value(config, name) != _finite_number(sweep, name):
-            raise ValueError(
-                f"COMSOL parameter '{name}' must match its Id(Vg) Sweep value."
-            )
+    # for name in ("Vg_start", "Vg_step", "Vg_finish"):
+    #     if _parameter_value(config, name) != _finite_number(sweep, name):
+    #         raise ValueError(
+    #             f"COMSOL parameter '{name}' must match its Id(Vg) Sweep value."
+    #         )
 
-    return MobilityWorkflow(config, sweep, preview)
+    return MobilityWorkflow(config, preview)
 
 
 def _parameter_value(config: Dict[str, Any], name: str) -> float:
@@ -128,10 +120,10 @@ def _parameter_value(config: Dict[str, Any], name: str) -> float:
     raise ValueError(f"COMSOL mobility parameter '{name}' is not configured.")
 
 
-def _gate_values(sweep: Dict[str, Any]) -> np.ndarray:
-    start = _finite_number(sweep, "Vg_start")
-    step = _finite_number(sweep, "Vg_step")
-    finish = _finite_number(sweep, "Vg_finish")
+def _gate_values(config: Dict[str, Any]) -> np.ndarray:
+    start = _parameter_value(config, "Vg_start")
+    step = _parameter_value(config, "Vg_step")
+    finish = _parameter_value(config, "Vg_finish")
     count = math.floor((finish - start) / step + 1e-12) + 1
     return start + step * np.arange(count, dtype=float)
 
@@ -156,7 +148,7 @@ def python_curve(workflow: MobilityWorkflow) -> Tuple[np.ndarray, np.ndarray]:
         )
 
     vt = VT0 - donor_concentration / N_PER_V
-    vg = _gate_values(workflow.sweep)
+    vg = _gate_values(config)
     current_a = id_model(
         vg,
         vt,

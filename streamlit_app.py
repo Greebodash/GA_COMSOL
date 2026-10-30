@@ -24,11 +24,10 @@ SWEEP_KEYS = ("Vg_start", "Vg_step", "Vg_finish")
 def build_run_config(
     workflow: MobilityWorkflow,
     parameter_values: Mapping[str, float],
-    sweep_values: Mapping[str, float],
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """Apply Streamlit form values without mutating loaded defaults."""
     config = copy.deepcopy(workflow.config)
-    sweep = dict(workflow.sweep)
+    #sweep = dict(workflow.sweep)
 
     configured_names = {item["name"] for item in config["parameters"]}
     if configured_names != set(parameter_values):
@@ -48,35 +47,35 @@ def build_run_config(
             )
         parameter["value"] = value
 
-    if set(sweep_values) != set(SWEEP_KEYS):
-        raise ValueError(
-            "Sweep values must include Vg_start, Vg_step, and Vg_finish."
-        )
-    for name in SWEEP_KEYS:
-        value = sweep_values[name]
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
-            raise TypeError(f"'{name}' must be numeric.")
-        if not math.isfinite(value):
-            raise ValueError(f"'{name}' must be finite.")
-        sweep[name] = value
+    # if set(sweep_values) != set(SWEEP_KEYS):
+    #     raise ValueError(
+    #         "Sweep values must include Vg_start, Vg_step, and Vg_finish."
+    #     )
+    # for name in SWEEP_KEYS:
+    #     value = sweep_values[name]
+    #     if isinstance(value, bool) or not isinstance(value, (int, float)):
+    #         raise TypeError(f"'{name}' must be numeric.")
+    #     if not math.isfinite(value):
+    #         raise ValueError(f"'{name}' must be finite.")
+    #     sweep[name] = value
 
-    if sweep["Vg_step"] <= 0:
-        raise ValueError("'Vg_step' must be greater than zero.")
-    if sweep["Vg_finish"] < sweep["Vg_start"]:
-        raise ValueError(
-            "'Vg_finish' must be greater than or equal to Vg_start."
-        )
+    # if sweep["Vg_step"] <= 0:
+    #     raise ValueError("'Vg_step' must be greater than zero.")
+    # if sweep["Vg_finish"] < sweep["Vg_start"]:
+    #     raise ValueError(
+    #         "'Vg_finish' must be greater than or equal to Vg_start."
+    #     )
 
     parameters_by_name = {
         parameter["name"]: parameter
         for parameter in config["parameters"]
     }
-    for name in SWEEP_KEYS:
-        parameters_by_name[name]["value"] = sweep[name]
+    # for name in SWEEP_KEYS:
+    #     parameters_by_name[name]["value"] = sweep[name]
 
     config["model"]["solve_model"] = True
     comsol_run.validate_config(config)
-    return config, sweep
+    return config
 
 
 def load_comsol_curves(
@@ -175,8 +174,6 @@ def main(config_file: Union[str, Path] = DEFAULT_CONFIG_FILE) -> None:
         st.subheader("Mobility and device parameters")
         columns = st.columns(2)
         for index, parameter in enumerate(workflow.config["parameters"]):
-            if parameter["name"] in SWEEP_KEYS:
-                continue
             value = float(parameter["value"])
             unit = f" ({parameter['unit']})" if parameter["unit"] else ""
             parameter_values[parameter["name"]] = columns[
@@ -189,34 +186,32 @@ def main(config_file: Union[str, Path] = DEFAULT_CONFIG_FILE) -> None:
                 key=f"parameter_{parameter['name']}",
             )
 
-        st.subheader("COMSOL Id(Vg) sweep parameters")
-        sweep_columns = st.columns(3)
-        for column, name in zip(sweep_columns, SWEEP_KEYS):
-            value = float(workflow.sweep[name])
-            sweep_values[name] = column.number_input(
-                name,
-                value=value,
-                step=_number_step(value),
-                format="%.6g",
-                key=f"sweep_{name}",
-            )
-            parameter_values[name] = sweep_values[name]
+        # st.subheader("COMSOL Id(Vg) sweep parameters")
+        # sweep_columns = st.columns(3)
+        # for column, name in zip(sweep_columns, SWEEP_KEYS):
+        #     value = float(workflow.sweep[name])
+        #     sweep_values[name] = column.number_input(
+        #         name,
+        #         value=value,
+        #         step=_number_step(value),
+        #         format="%.6g",
+        #         key=f"sweep_{name}",
+        #     )
+        #     parameter_values[name] = sweep_values[name]
 
         submitted = st.form_submit_button("Solve COMSOL")
 
     if submitted:
         st.session_state["mobility_last_run"] = None
-        config, sweep = build_run_config(
+        config = build_run_config(
             workflow,
             parameter_values,
-            sweep_values,
         )
         with st.status("Running COMSOL solve...", expanded=True) as status:
             comsol_run.run_config(config)
             curves = load_comsol_curves(config)
             st.session_state["mobility_last_run"] = {
                 "config": config,
-                "sweep": sweep,
                 "curves": curves,
             }
             status.update(
@@ -235,7 +230,6 @@ def main(config_file: Union[str, Path] = DEFAULT_CONFIG_FILE) -> None:
     if show_python:
         preview_workflow = MobilityWorkflow(
             last_run["config"],
-            last_run["sweep"],
             workflow.preview,
         )
         preview_curve = python_curve(preview_workflow)

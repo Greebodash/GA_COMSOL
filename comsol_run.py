@@ -366,6 +366,7 @@ def run_config(config):
     finally:
         if client is not None:
             client.clear()
+            client.disconnect()
             logger.info("COMSOL backend disconnected.")
 
 
