@@ -129,7 +129,7 @@ def create_argument_parser():
         type=Path,
         help=(
             "CSV files and/or directories containing CSV files. "
-            "Defaults to the spectra/ directory."
+            "Defaults to the results/ directory."
         ),
     )
     parser.add_argument(
@@ -139,18 +139,18 @@ def create_argument_parser():
     )
     parser.add_argument(
         "--x-column",
-        default="frequency_thz",
+        default="bias_voltage_v",
         help=(
             "Numeric CSV column for the horizontal axis "
-            "(default: frequency_thz)"
+            "(default: bias_voltage_v)"
         ),
     )
     parser.add_argument(
         "--y-column",
-        default="transmission",
+        default="drain_current_a",
         help=(
             "Numeric CSV column for the vertical axis "
-            "(default: transmission)"
+            "(default: drain_current_a)"
         ),
     )
     parser.add_argument(
@@ -200,7 +200,7 @@ def main(argv=None):
     ):
         parser.error("--min must be less than or equal to --max.")
 
-    inputs = args.inputs or [Path("spectra")]
+    inputs = args.inputs or [Path("results")]
     files = discover_csv_files(inputs)
     if not files:
         parser.error(
@@ -210,7 +210,7 @@ def main(argv=None):
         parser.error("The output image path must not overwrite an input CSV file.")
 
     figure, axis = plt.subplots(figsize=(10, 6))
-    plotted_spectra = []
+    plotted_curves = []
     plotted_files = []
     skipped_without_metadata = 0
     for path in files:
@@ -231,10 +231,10 @@ def main(argv=None):
             args.y_column,
         )
 
-        plotted_spectra.append((path, x_values, y_values))
+        plotted_curves.append((path, x_values, y_values))
         plotted_files.append(path)
 
-    plotted_count = len(plotted_spectra)
+    plotted_count = len(plotted_curves)
     if PLOT_COLORS is None:
         colormap = plt.get_cmap(PLOT_COLORMAP)
         colors = [
@@ -249,7 +249,7 @@ def main(argv=None):
             for index in range(plotted_count)
         ]
 
-    for (path, x_values, y_values), color in zip(plotted_spectra, colors):
+    for (path, x_values, y_values), color in zip(plotted_curves, colors):
         axis.plot(
             x_values,
             y_values,

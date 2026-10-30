@@ -8,27 +8,30 @@ import re
 import sys
 from pathlib import Path
 
-import mph
-
 
 CONFIG_FILE = "comsol_parameters.md"
 LOG_DIR = Path("logs")
-SPECTRA_DIR = Path("spectra")
 
-LOG_DIR.mkdir(parents=True, exist_ok=True)
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-        logging.FileHandler(
-            LOG_DIR
-            / f"comsolrun_app_{datetime.now().strftime('%Y%m%d_%H%M_%f')}.log",
-            encoding="utf-8",
-        ),
-    ],
-)
+def configure_logging():
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        handlers=[
+            logging.StreamHandler(sys.stdout),
+            logging.FileHandler(
+                LOG_DIR
+                / (
+                    "comsolrun_app_"
+                    f"{datetime.now().strftime('%Y%m%d_%H%M_%f')}.log"
+                ),
+                encoding="utf-8",
+            ),
+        ],
+    )
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -55,7 +58,7 @@ def parse_markdown_config(filename):
             f"Configuration file not found: {os.path.abspath(filename)}"
         )
 
-    config = {"model": {}, "parameters": []}
+    config = {"model": {}, "parameters": [], "evaluations": []}
     section = None
 
     with open(filename, "r", encoding="utf-8") as config_file:
@@ -76,6 +79,8 @@ def parse_markdown_config(filename):
                     section = "model"
                 elif title in ("parameters", "comsol parameters"):
                     section = "parameters"
+                elif title == "evaluations":
+                    section = "evaluations"
                 else:
                     section = None
                 continue
@@ -108,6 +113,42 @@ def parse_markdown_config(filename):
                     }
                 )
 
+            if section == "evaluations" and line.startswith("|"):
+                cells = [cell.strip() for cell in line.strip("|").split("|")]
+                if not cells or cells[0].lower() == "name":
+                    continue
+                if all(set(cell) <= set("-:") for cell in cells):
+                    continue
+                if len(cells) != 8:
+                    raise ValueError(
+                        "Evaluation table must contain exactly 8 columns: "
+                        "name, dataset, x_expression, x_unit, x_column, "
+                        "y_expression, y_unit, y_column."
+                    )
+
+                (
+                    name,
+                    dataset,
+                    x_expression,
+                    x_unit,
+                    x_column,
+                    y_expression,
+                    y_unit,
+                    y_column,
+                ) = cells
+                config["evaluations"].append(
+                    {
+                        "name": name,
+                        "dataset": dataset,
+                        "x_expression": x_expression,
+                        "x_unit": x_unit,
+                        "x_column": x_column,
+                        "y_expression": y_expression,
+                        "y_unit": y_unit,
+                        "y_column": y_column,
+                    }
+                )
+
     validate_config(config)
     return config
 
@@ -116,16 +157,22 @@ def validate_config(config):
     required_model = (
         "input_file",
         "output_file",
-        "evaluation_tag",
+        "evaluation_csv",
     )
     for key in required_model:
         if key not in config["model"]:
             raise ValueError(f"Missing model configuration: {key}")
+        if not config["model"][key]:
+            raise ValueError(f"Model configuration '{key}' cannot be empty.")
 
-    config["model"].setdefault("temporary_table_tag", "comsol_temp_table")
-
-    if not config["parameters"]:
-        raise ValueError("No COMSOL parameters were found.")
+    solve_model = config["model"].get("solve_model", True)
+    if not isinstance(solve_model, bool):
+        raise ValueError("Model configuration 'solve_model' must be true or false.")
+    if not solve_model and config["parameters"]:
+        raise ValueError(
+            "Parameter overrides require solve_model: true; refusing to "
+            "evaluate saved solutions with potentially stale parameters."
+        )
 
     names = set()
     for parameter in config["parameters"]:
@@ -141,39 +188,55 @@ def validate_config(config):
                 f"Parameter value for {name} must be numeric."
             )
 
+    if not config["evaluations"]:
+        raise ValueError("No COMSOL evaluations were configured.")
 
-def parse_evaluation_tags(value):
-    """Parse one or more comma-separated COMSOL evaluation tags."""
-    tags = [tag.strip() for tag in value.split(",")]
-    if any(not tag for tag in tags):
-        raise ValueError("evaluation_tag must not contain empty tags.")
-    if len(tags) != len(set(tags)):
-        raise ValueError("evaluation_tag must not contain duplicate tags.")
-    return tags
+    evaluation_names = set()
+    required_evaluation = (
+        "name",
+        "dataset",
+        "x_expression",
+        "x_column",
+        "y_expression",
+        "y_column",
+    )
+    for evaluation in config["evaluations"]:
+        for key in required_evaluation:
+            if not evaluation[key]:
+                raise ValueError(
+                    f"Evaluation has an empty required field: {key}."
+                )
+        if evaluation["x_column"] == evaluation["y_column"]:
+            raise ValueError(
+                f"Evaluation '{evaluation['name']}' must use distinct "
+                "X and Y column names."
+            )
+        name = evaluation["name"]
+        if name in evaluation_names:
+            raise ValueError(f"Duplicate evaluation name: {name}")
+        evaluation_names.add(name)
 
 
-def evaluation_csv_paths(filename, tags):
-    """Return one CSV path per tag, preserving the path for a single tag."""
-    if len(tags) == 1:
-        return {tags[0]: filename}
-
+def evaluation_csv_paths(filename, evaluations):
+    """Return one clearly labeled CSV path per configured evaluation."""
     csv_path = Path(filename)
     paths = {}
     used_suffixes = set()
-    for tag in tags:
-        suffix = re.sub(r"[^A-Za-z0-9._-]+", "_", tag).strip("._-")
+    for evaluation in evaluations:
+        name = evaluation["name"]
+        suffix = re.sub(r"[^A-Za-z0-9._-]+", "_", name).strip("._-")
         if not suffix:
             raise ValueError(
-                f"Evaluation tag '{tag}' cannot be used in a CSV filename."
+                f"Evaluation name '{name}' cannot be used in a CSV filename."
             )
         normalized_suffix = suffix.casefold()
         if normalized_suffix in used_suffixes:
             raise ValueError(
-                "Evaluation tags produce duplicate CSV filenames after "
+                "Evaluation names produce duplicate CSV filenames after "
                 "sanitization."
             )
         used_suffixes.add(normalized_suffix)
-        paths[tag] = str(
+        paths[name] = str(
             csv_path.with_name(
                 f"{csv_path.stem}_{suffix}{csv_path.suffix}"
             )
@@ -186,6 +249,8 @@ def start_comsol(input_file):
         raise FileNotFoundError(
             f"COMSOL model not found: {os.path.abspath(input_file)}"
         )
+
+    import mph
 
     logger.info("Starting COMSOL backend...")
     client = mph.start()
@@ -211,65 +276,93 @@ def set_comsol_parameters(model, parameters):
         logger.info("Set COMSOL parameter %s = %s", name, expression)
 
 
-def save_evaluation_csv(filename, frequency, transmission):
+def save_evaluation_csv(filename, x_values, y_values, x_column, y_column):
+    if len(x_values) != len(y_values):
+        raise ValueError(
+            f"Cannot save mismatched X/Y arrays: "
+            f"{len(x_values)} vs {len(y_values)}."
+        )
     Path(filename).parent.mkdir(parents=True, exist_ok=True)
     with open(filename, "w", newline="", encoding="utf-8") as output_file:
         writer = csv.writer(output_file)
-        writer.writerow(["frequency_thz", "transmission"])
-        writer.writerows(zip(frequency, transmission))
+        writer.writerow([x_column, y_column])
+        writer.writerows(zip(x_values, y_values))
     logger.info("Saved evaluation data: %s", os.path.abspath(filename))
 
 
 def run(config_file=CONFIG_FILE):
-    SPECTRA_DIR.mkdir(parents=True, exist_ok=True)
     config = parse_markdown_config(config_file)
+    run_config(config)
+
+
+def run_config(config):
+    """Solve and export curves from an already-parsed configuration."""
+    validate_config(config)
+    configure_logging()
     model_config = config["model"]
     input_file = str(model_config["input_file"])
     output_file = str(model_config["output_file"])
-    evaluation_tags = parse_evaluation_tags(
-        str(model_config["evaluation_tag"])
-    )
-    temporary_table_tag = str(model_config["temporary_table_tag"])
-    evaluation_csv = str(
-        model_config.get(
-            "evaluation_csv",
-            Path(output_file).with_suffix(".csv"),
-        )
-    )
+    evaluation_csv = str(model_config["evaluation_csv"])
 
     logger.info("Input model: %s", input_file)
     logger.info("Output model: %s", output_file)
-    evaluation_csvs = evaluation_csv_paths(evaluation_csv, evaluation_tags)
-    logger.info("Evaluation tags: %s", ", ".join(evaluation_tags))
+    logger.info(
+        "Configured electrical curves: %s",
+        ", ".join(item["name"] for item in config["evaluations"]),
+    )
+    solve_model = model_config.get("solve_model", True)
+    evaluation_csvs = evaluation_csv_paths(
+        evaluation_csv,
+        config["evaluations"],
+    )
 
     client = None
     try:
         client, model = start_comsol(input_file)
         set_comsol_parameters(model, config["parameters"])
 
-        logger.info("Solving COMSOL model...")
-        model.solve()
-        logger.info("COMSOL solve completed.")
+        if solve_model:
+            logger.info("Solving COMSOL model studies...")
+            model.solve()
+            logger.info("COMSOL solve completed.")
+        else:
+            logger.info(
+                "Using saved COMSOL solutions; model.solve() is disabled "
+                "by configuration."
+            )
 
-        from utils.comsol_utils import extract_table
+        from utils.comsol_utils import evaluate_dataset_xy
 
-        for evaluation_tag in evaluation_tags:
-            logger.info("Extracting evaluation tag: %s", evaluation_tag)
-            frequency, transmission = extract_table(
+        for evaluation in config["evaluations"]:
+            logger.info(
+                "Evaluating %s on dataset %s",
+                evaluation["name"],
+                evaluation["dataset"],
+            )
+            x_values, y_values = evaluate_dataset_xy(
                 model,
-                evaluation_tag=evaluation_tag,
-                temporary_table_tag=temporary_table_tag,
+                evaluation["dataset"],
+                evaluation["x_expression"],
+                evaluation["x_unit"],
+                evaluation["y_expression"],
+                evaluation["y_unit"],
             )
             save_evaluation_csv(
-                evaluation_csvs[evaluation_tag],
-                frequency,
-                transmission,
+                evaluation_csvs[evaluation["name"]],
+                x_values,
+                y_values,
+                evaluation["x_column"],
+                evaluation["y_column"],
             )
 
-        output_parent = os.path.dirname(os.path.abspath(output_file))
-        os.makedirs(output_parent, exist_ok=True)
-        model.save(output_file)
-        logger.info("Saved solved COMSOL model: %s", os.path.abspath(output_file))
+        if solve_model:
+            output_parent = os.path.dirname(os.path.abspath(output_file))
+            os.makedirs(output_parent, exist_ok=True)
+            model.save(output_file)
+            logger.info(
+                "Saved solved COMSOL model: %s",
+                os.path.abspath(output_file),
+            )
     finally:
         if client is not None:
             client.clear()

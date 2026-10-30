@@ -1,30 +1,38 @@
-# COMSOL spectrum tools
+# COMSOL MoS₂ FET electrical workflows
 
-Python scripts for running COMSOL models, optimizing transmission spectra,
-comparing two models, and plotting generated spectra.
+Python tools for running the bottom-gate monolayer and four-layer MoS₂
+semiconductor models from the [MoS2-FET repository](https://github.com/MatteoOrlandini/MoS2-FET)
+and exporting their drain-current output and transfer curves.
 
 ## Project layout
 
 ```text
 .
-├── comsol_run.py                       # Run one COMSOL model/evaluation
-├── ga_optimize.py                      # Optimize one model's spectrum
-├── ga_optimize_difference.py           # Optimize the difference between two models
-├── plot_spectra.py                     # Plot spectrum CSV files
-├── comsol_parameters.md                # Single-solve settings and parameters
-├── ga_optimize_parameters.md           # Single-model optimization settings
-├── ga_optimize_difference_parameters.md # Two-model optimization settings
-├── models/                             # Local COMSOL models (not included)
-├── utils/
-│   ├── comsol_utils.py                 # COMSOL table/evaluation helpers
-│   └── ga_utils.py                     # Shared optimization/spectrum helpers
-├── spectra/                            # Generated spectra (created as needed)
-└── spectra_difference/                 # Generated comparison spectra
+├── comsol_run.py              # Solve model studies and export electrical curves
+├── comsol_sweep.py            # Run a parameter sweep from Python workflows
+├── comsol_parameters.md       # Model paths, optional parameters, and evaluations
+├── mobility_parameters.md    # Mobility values and Id(Vg) sweep range
+├── comsol_mobility_run.py    # Python preview and fresh COMSOL mobility run
+├── streamlit_app.py           # Browser UI for mobility runs and curves
+├── plot_results.py            # Plot electrical result CSV files
+├── models/                    # Local COMSOL models (not included)
+├── results/                   # Generated CSV files and plots
+└── utils/
+    └── comsol_utils.py        # COMSOL solution and evaluation helpers
 ```
 
-COMSOL `.mph` model files are supplied separately and are not included here.
-The paths in the configuration templates are examples; edit them to point to
-your local models and desired output locations.
+COMSOL `.mph` files are not included. Download one or both bottom-gate models
+from the source project and place them in `models/`:
+
+- [Monolayer MoS₂ FET with bottom gate](https://github.com/MatteoOrlandini/MoS2-FET/blob/master/MoS2%20monolayer%20FET%20with%20bottom%20gate.mph)
+- [Four-layer MoS₂ FET with bottom gate](https://github.com/MatteoOrlandini/MoS2-FET/blob/master/MoS2%204%20Layer%20FET%20with%20bottom%20gate.mph)
+
+The linked [report](https://github.com/MatteoOrlandini/MoS2-FET/blob/master/Report.pdf)
+describes the semiconductor models and example results. It reports monolayer
+output curves at `Vg = 10 V` and transfer curves at `Vd = 0.05 V`, and
+four-layer output curves at `Vg = 0.1 V` and transfer curves at `Vd = 0.01 V`.
+The COMSOL studies and parametric sweep values saved in each model determine
+the actual operating points used by a run.
 
 ## Requirements
 
@@ -38,130 +46,151 @@ Install the Python dependencies in the Python environment used with COMSOL:
 python -m pip install -r requirements.txt
 ```
 
-## Running on an SSH node with tmux
+## Run a COMSOL model
 
-For long simulations on a remote node, run the workflow inside a `tmux`
-session on that node so an SSH disconnect does not close the terminal running
-the simulation. Make sure `tmux` is available on the node, then connect and
-start a named session:
+Edit [`comsol_parameters.md`](comsol_parameters.md) and run from the project
+root:
 
 ```bash
-tmux new -s comsol-run
+conda run -n mp python comsol_run.py
 ```
 
-Inside tmux, start a workflow as usual, for example:
+The local configuration solves `models/MoS2_ML.mph` and exports its transfer
+curve to `results/mos2_ml_id_vg.csv` (`bias_voltage_v` is `Vg` and
+`drain_current_a` is the terminal current).
+
+The configured MPh dataset name (`Id(Vg)//Parametric Solutions 2`) and
+expressions (`Vg`, `semi.I0_1`) were confirmed against the supplied model by
+loading and evaluating it in the `mp` Conda environment. COMSOL's internal
+dataset tags are not the names MPh expects for this lookup. If the local model
+has different dataset names or expressions, update the evaluation table
+accordingly.
+
+The standard runner follows the `solve_model` setting in
+[`comsol_parameters.md`](comsol_parameters.md). The mobility workflow described
+below always solves the model with the configured mobility values.
+
+## Preview and run the mobility model
+
+Edit [`mobility_parameters.md`](mobility_parameters.md) to adjust
+`alpha_mu`, `mu_C0`, `mu_ph`, `n_ref`, `mu_min`, and the donor concentration
+parameter. Parameter names must match the COMSOL model; if its donor parameter
+is not named `donor_concentration`, change the table name and the
+`donor_parameter` value in the Python Preview section to match.
+
+The `Vg_start`, `Vg_step`, and `Vg_finish` entries are also sent to COMSOL as
+model parameter overrides. Configure the `Id(Vg)` study in the `.mph` file to
+use those parameters as its sweep start, step, and finish. The same values set
+the Python preview range.
+
+Generate a fast Python preview without launching COMSOL:
 
 ```bash
-python ga_optimize.py
+conda run -n mp python comsol_mobility_run.py --preview-only
 ```
 
-To leave it running and return to the remote shell, press the default tmux
-detach key sequence: **Ctrl+b**, then release both keys and press **d**. You
-can then disconnect from SSH; the tmux session and its process remain on the
-node.
-
-After reconnecting to the same node, list sessions and reattach:
+Run the mobility model in COMSOL and save a plot comparing its `Id(Vg)` result
+with the Python preview:
 
 ```bash
-tmux ls
-tmux attach-session -t comsol-run
+conda run -n mp python comsol_mobility_run.py
 ```
 
-Use the same workflow for `comsol_run.py` or `ga_optimize_difference.py`.
-Detaching does not stop the simulation; to stop it, reattach and interrupt the
-command normally. tmux does not protect a process from the node being rebooted,
-shut down, or reclaimed by a job scheduler.
+The workflow explicitly requires `solve_model: true`, writes the solved model
+to `models/MoS2_ML_mobility_out.mph`, exports its transfer curve to
+`results/mos2_ml_mobility_id_vg.csv`, and saves the comparison plot to
+`results/mos2_ml_mobility_curves.png`. The Python preview uses the compact
+mobility/current model in `fit_mos2_mobility.py`; the COMSOL curve comes from
+the configured `Id(Vg)` dataset and is the simulation output.
 
-## Run a workflow
+## Streamlit interface
 
-Run commands from the repository root so the scripts can find their
-configuration files and the `utils` package.
-
-### Single COMSOL solve
-
-Edit [`comsol_parameters.md`](comsol_parameters.md), including model paths,
-parameters, and evaluation settings, then run:
+Start the browser app from the project root using the COMSOL Python environment:
 
 ```bash
-python comsol_run.py
+conda run -n mp streamlit run streamlit_app.py
 ```
 
-The script saves the solved model and evaluation CSV to the configured paths.
-`evaluation_tag` can contain one tag or a comma-separated list such as
-`gev1, gev2`; multiple tags are extracted into separate CSV files with each tag
-appended to the configured CSV filename.
+The app loads defaults from `mobility_parameters.md`, lets you adjust the
+configured COMSOL parameters and `Id(Vg)` sweep start/step/finish, and runs
+COMSOL only after you select **Solve COMSOL**. Each configured COMSOL
+evaluation is displayed in its own chart after a successful solve. Select
+**Also show the Python model preview** to overlay the approximate Python curve
+on the COMSOL `Id(Vg)` chart.
 
-### Optimize one model
+## Run a parameter sweep from Python
 
-Set the input model, objective, and parameter bounds in
-[`ga_optimize_parameters.md`](ga_optimize_parameters.md), then run:
+`comsol_sweep.py` provides an importable API for varying one COMSOL parameter
+without changing the single-run command. Pass any iterable of finite numeric
+values; each value is solved in order. A config file path or a parsed config
+mapping is accepted. Mapping inputs are copied and left unchanged.
+
+```python
+from comsol_run import parse_markdown_config
+from comsol_sweep import run_sweep
+
+config = parse_markdown_config("comsol_parameters.md")
+config["model"]["solve_model"] = True
+
+results = run_sweep(
+    "Vg",
+    (0.1 * step for step in range(4)),
+    config=config,
+    parameter_unit="V",
+    progress_callback=lambda result: print(
+        f"Finished {result.parameter_name}={result.parameter_value}: "
+        f"{result.model_path}"
+    ),
+)
+
+for result in results:
+    print(result.parameter_value, result.evaluation_csvs)
+```
+
+The swept parameter's unit is taken from its entry in the config, if present;
+`parameter_unit` can provide or override it. Each result is a
+`SweepRunResult` containing the parameter name and value, saved model path,
+and a mapping of evaluation names to CSV paths. Output names include the
+parameter, point index, and value so repeated values and separate points do
+not overwrite one another. The optional callback receives each result after
+that point has been solved and saved.
+
+Sweeps always solve the model and reject `solve_model: false`, since saved
+solutions cannot be reused for new parameter values. Use a model with a
+configured sweep that solves successfully in the installed COMSOL version.
+
+The runner does not create plots. Plotting is a separate, explicit command:
 
 ```bash
-python ga_optimize.py
+conda run -n mp python plot_results.py results --output results/id-vd.png
 ```
 
-The optimization writes its results CSV and individual spectrum CSVs to the
-locations set in the script (`ga_results.csv` and `spectra/` by default).
+## Plot electrical curves
 
-### Optimize the difference between two models
-
-Set the reference and sample model paths, objective, and parameter bounds in
-[`ga_optimize_difference_parameters.md`](ga_optimize_difference_parameters.md), then
-run:
+Plot all CSV files in `results/` using the default bias-voltage and
+drain-current columns:
 
 ```bash
-python ga_optimize_difference.py
+python plot_results.py results --output results/id-vd.png
 ```
 
-This workflow writes the optimization results and comparison spectra to
-`ga_difference_results.csv` and `spectra_difference/` by default.
-
-### Plot CSV data
-
-`plot_spectra.py` accepts one or more CSV files and/or directories. Directories
-are searched for CSV files (not recursively). With no inputs it uses
-`spectra/`:
+To plot only the gate-transfer curve:
 
 ```bash
-python plot_spectra.py spectra --output spectra.png
-python plot_spectra.py spectra/H_d_225nm__H_h_2p2um.csv
-python plot_spectra.py first.csv second.csv another_spectra/
+conda run -n mp python plot_results.py results/mos2_ml_id_vg.csv \
+  --output results/id-vg.png
 ```
 
-By default, the tool plots `frequency_thz` against `transmission`. Select any
-numeric columns present in the input CSVs with `--x-column` and `--y-column`:
-
-```bash
-python plot_spectra.py results.csv --x-column frequency_thz --y-column T_reference
-```
-
-All files plotted together must contain both selected columns.
-
-Filter files by any numeric parameter recorded in their metadata comments using
-`--parameter` and an inclusive `--min` and/or `--max` range:
-
-```bash
-python plot_spectra.py spectra --parameter H_d --min 225 --max 390
-python plot_spectra.py spectra --parameter H_h --max 1.8
-```
-
-Range values use the same units as the metadata (for example, `H_d` is stored
-in nm in generated optimization spectra). Metadata-free CSVs can still be
-plotted, but are excluded when a parameter filter is active. Parameter filters
-read metadata comments; they do not infer values from filenames. The figure is
-displayed interactively if `--output` is omitted.
-
-By default, curve colors are evenly sampled across the `magma` colormap, with
-the number of samples matching the number of curves in the plot. Edit
-`PLOT_COLORMAP` near the top of `plot_spectra.py` to use another Matplotlib
-colormap. To use a custom palette instead, set `PLOT_COLORS` to a list of any
-number of Matplotlib color names or values; the list repeats if there are more
-curves than colors. `TEXT_SIZE` and `SHOW_LEGEND` set the default text size and
-legend visibility.
+`plot_results.py` accepts CSV files and directories (not recursively), and
+supports other numeric column names through `--x-column` and `--y-column`.
+The plot labels use the selected column names. Parameter filtering is
+available for input CSV files that include numeric `# key = value` metadata
+comments.
 
 ## Logs and generated files
 
-The COMSOL solve script creates `logs/` for its run log and creates the
-configured CSV's parent directory when needed. The optimization scripts write
-their spectra and result CSVs to their configured/default output locations.
-Generated spectra and logs are local run outputs, not source files.
+The run scripts write logs to `logs/`. CSV files are written to the parent
+directory configured by `evaluation_csv`; plot images are saved wherever
+`--output` points. COMSOL execution requires the external model file and a
+licensed installation, so the Python-only checks do not substitute for
+running the configured model in COMSOL.

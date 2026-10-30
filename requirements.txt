@@ -5,3 +5,4 @@ numpy==2.5.0
 scipy==1.18.0
 pygad==3.7.0
 matplotlib==3.11.0
+streamlit>=1.40,<2

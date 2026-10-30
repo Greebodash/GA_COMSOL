@@ -1,13 +1,9 @@
 
 import logging
+import math
 import os
 import sys
 import time
-
-import mph
-import numpy as np
-from scipy.signal import find_peaks, peak_widths
-import pygad
 
 
 # ======================================================================
@@ -21,6 +17,66 @@ def get_logger():
         handlers=[logging.StreamHandler(sys.stdout)],
     )
     return logging.getLogger(__name__)
+
+
+def evaluate_dataset_xy(
+    model,
+    dataset,
+    x_expression,
+    x_unit,
+    y_expression,
+    y_unit,
+):
+    """Evaluate two global expressions over one COMSOL solution dataset."""
+    if not dataset:
+        raise ValueError("A COMSOL solution dataset must be specified.")
+
+    def evaluate(expression, unit):
+        values = model.evaluate(
+            expression,
+            unit=unit or None,
+            dataset=dataset,
+        )
+        if hasattr(values, "tolist"):
+            values = values.tolist()
+
+        def flatten(items):
+            if isinstance(items, (list, tuple)):
+                return [
+                    number
+                    for item in items
+                    for number in flatten(item)
+                ]
+            try:
+                number = float(items)
+            except (TypeError, ValueError) as error:
+                raise ValueError(
+                    f"COMSOL expression '{expression}' on dataset "
+                    f"'{dataset}' returned a non-numeric value."
+                ) from error
+            if not math.isfinite(number):
+                raise ValueError(
+                    f"COMSOL expression '{expression}' on dataset "
+                    f"'{dataset}' returned a non-finite value."
+                )
+            return [number]
+
+        return flatten(values)
+
+    x_values = evaluate(x_expression, x_unit)
+    y_values = evaluate(y_expression, y_unit)
+
+    if not x_values or not y_values:
+        raise ValueError(
+            f"COMSOL dataset '{dataset}' returned no X/Y values."
+        )
+    if len(x_values) != len(y_values):
+        raise ValueError(
+            f"COMSOL dataset '{dataset}' returned mismatched X/Y lengths: "
+            f"{len(x_values)} vs {len(y_values)}."
+        )
+
+    return x_values, y_values
 
 
 def set_model_parameter(model, name, value, unit=""):
@@ -53,6 +109,7 @@ def set_model_parameter(model, name, value, unit=""):
 def run_comsol_simulation(input_file, output_file):
 
     logger = get_logger()
+    import mph
 
     if not os.path.exists(input_file):
         logger.error(
@@ -214,6 +271,7 @@ def extract_table(
     """
 
     logger = get_logger()
+    import numpy as np
 
     java_model = model.java
 
@@ -450,6 +508,8 @@ def calculate_fwhm(
     transmission,
     target_freq,
 ):
+    import numpy as np
+    from scipy.signal import find_peaks, peak_widths
 
     transmission = np.asarray(
         transmission,
