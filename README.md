@@ -11,8 +11,8 @@ and exporting their drain-current output and transfer curves.
 ├── comsol_run.py              # Solve model studies and export electrical curves
 ├── comsol_sweep.py            # Run a parameter sweep from Python workflows
 ├── comsol_parameters.md       # Model paths, optional parameters, and evaluations
-├── mobility_parameters.md    # Mobility values and Id(Vg) sweep range
-├── comsol_mobility_run.py    # Python preview and fresh COMSOL mobility run
+├── mobility_parameters_MoS2.md  # Mobility values and Id(Vg) sweep range
+├── comsol_mobility_run.py       # Python preview and fresh COMSOL mobility run
 ├── streamlit_app.py           # Browser UI for mobility runs and curves
 ├── plot_results.py            # Plot electrical result CSV files
 ├── models/                    # Local COMSOL models (not included)
@@ -72,7 +72,7 @@ below always solves the model with the configured mobility values.
 
 ## Preview and run the mobility model
 
-Edit [`mobility_parameters.md`](mobility_parameters.md) to adjust
+Edit [`mobility_parameters_MoS2.md`](mobility_parameters_MoS2.md) to adjust
 `alpha_mu`, `mu_C0`, `mu_ph`, `n_ref`, `mu_min`, and the donor concentration
 parameter. Parameter names must match the COMSOL model; if its donor parameter
 is not named `donor_concentration`, change the table name and the
@@ -86,14 +86,16 @@ the Python preview range.
 Generate a fast Python preview without launching COMSOL:
 
 ```bash
-conda run -n mp python comsol_mobility_run.py --preview-only
+conda run -n mp python comsol_mobility_run.py \
+  --config mobility_parameters_MoS2.md --preview-only
 ```
 
 Run the mobility model in COMSOL and save a plot comparing its `Id(Vg)` result
 with the Python preview:
 
 ```bash
-conda run -n mp python comsol_mobility_run.py
+conda run -n mp python comsol_mobility_run.py \
+  --config mobility_parameters_MoS2.md
 ```
 
 The workflow explicitly requires `solve_model: true`, writes the solved model
@@ -111,12 +113,41 @@ Start the browser app from the project root using the COMSOL Python environment:
 conda run -n mp streamlit run streamlit_app.py
 ```
 
-The app loads defaults from `mobility_parameters.md`, lets you adjust the
-configured COMSOL parameters and `Id(Vg)` sweep start/step/finish, and runs
-COMSOL only after you select **Solve COMSOL**. Each configured COMSOL
-evaluation is displayed in its own chart after a successful solve. Select
-**Also show the Python model preview** to overlay the approximate Python curve
-on the COMSOL `Id(Vg)` chart.
+The app builds its editable controls from parameter rows in its configured
+Markdown file: adding or removing a row updates the form on the next Streamlit
+rerun. The `category` column places controls in expandable groups, and
+`description` text appears as input help;
+rows without a category are shown under **Other**. Change the **COMSOL model
+file** field to run a different `.mph` file; relative paths are resolved from
+the project root, and absolute paths are accepted. The app runs COMSOL only
+after you select **Solve COMSOL**. Each configured COMSOL evaluation is
+displayed in its own chart after a successful solve.
+Select **Also show the Python model preview** to overlay the approximate
+Python curve on the COMSOL `Id(Vg)` chart.
+
+After a COMSOL run, compare its exported `Id(Vg)` curve against the
+fixed-parameter Python approximation with:
+
+```bash
+conda run -n mp python fit_mos2_mobility.py \
+  --config mobility_parameters_MoS2.md
+```
+
+The comparison tool reads the configured `id_vg` CSV path and uses the
+COMSOL-related parameter values in that Markdown file without fitting or
+changing them. It reports MAE, RMSE, maximum absolute error, normalized RMSE,
+and R-squared, and saves a comparison plot beside the CSV. Use `--comsol-csv`
+to select a different COMSOL export, `--evaluation` to compare another
+configured evaluation, or `--plot` to choose the plot path. These metrics show
+how closely the compact Python approximation reproduces COMSOL; without
+independent experimental/reference data, they do not measure physical accuracy
+of the COMSOL simulation.
+
+After a successful Streamlit solve, the app keeps the previous successful run
+in the current browser session. The **Compare with previous successful run**
+option overlays matching evaluations, and each chart has a CSV download with
+current and previous-run values aligned by x value. Previous values are blank
+where the x values do not match.
 
 ## Run a parameter sweep from Python
 

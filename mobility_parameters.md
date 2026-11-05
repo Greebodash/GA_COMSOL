@@ -36,9 +36,21 @@ The COMSOL runner applies these model parameters before solving. Configure the
 
 - donor_parameter: donor_concentration
 - plot_file: results/mos2_ml_mobility_curves.png
+- oxide_relative_permittivity: 3.9
+- current_calibration_nA_per_V_at_100_mobility: 148
+- calibration_drain_voltage: 0.05
+- calibration_width_um: 6.8
+- calibration_length_um: 3.5
+- undoped_threshold_voltage: -0.80
+- fit_from_vg: 6
+- channel_thickness_nm: 0.7
+- oxide_thickness_nm: 300
+- drain_voltage_v: 0.05
+- channel_width_um: 6.8
+- channel_length_um: 3.5
 
 ## Evaluations
 
 | name | dataset | x_expression | x_unit | x_column | y_expression | y_unit | y_column |
 |---|---|---|---|---|---|---|---|
-| id_vg | Id(Vg)//Parametric Solutions 2 | Vg | V | bias_voltage_v | semi.I0_1 | A | drain_current_a |
+| id_vg | Id(Vg)//Solution 1  | Vg | V | bias_voltage_v | semi.I0_1 | A | drain_current_a |

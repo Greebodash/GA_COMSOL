@@ -16,7 +16,7 @@ from comsol_run import (
     parse_markdown_config,
     parse_value,
 )
-from fit_mos2_mobility import N_PER_V, VT0, id_model
+from fit_mos2_mobility import build_model_settings, id_model
 
 
 DEFAULT_CONFIG_FILE = "mobility_parameters.md"
@@ -104,11 +104,10 @@ def load_workflow(
             "Missing COMSOL mobility parameter(s): "
             + ", ".join(sorted(missing))
         )
-    # for name in ("Vg_start", "Vg_step", "Vg_finish"):
-    #     if _parameter_value(config, name) != _finite_number(sweep, name):
-    #         raise ValueError(
-    #             f"COMSOL parameter '{name}' must match its Id(Vg) Sweep value."
-    #         )
+    if "fit_from_vg" not in preview:
+        raise ValueError("'fit_from_vg' must be configured under Python Preview.")
+    _finite_number(preview, "fit_from_vg")
+    build_model_settings(config, preview)
 
     return MobilityWorkflow(config, preview)
 
@@ -136,18 +135,26 @@ def python_curve(workflow: MobilityWorkflow) -> Tuple[np.ndarray, np.ndarray]:
     alpha = _parameter_value(config, "alpha_mu")
     mu_c0 = _parameter_value(config, "mu_C0")
     mu_ph = _parameter_value(config, "mu_ph")
-    n_ref = _parameter_value(config, "n_ref")
-    mu_min = _parameter_value(config, "mu_min")
+    settings = build_model_settings(config, workflow.preview)
 
     if donor_concentration < 0:
         raise ValueError("Donor concentration cannot be negative.")
-    if alpha < 0 or mu_c0 <= 0 or mu_ph <= 0 or n_ref <= 0 or mu_min < 0:
+    if (
+        alpha < 0
+        or mu_c0 <= 0
+        or mu_ph <= 0
+        or settings.n_ref <= 0
+        or settings.mu_min < 0
+    ):
         raise ValueError(
             "Mobility settings require alpha_mu and mu_min >= 0, and "
             "mu_C0, mu_ph, and n_ref > 0."
         )
 
-    vt = VT0 - donor_concentration / N_PER_V
+    vt = (
+        settings.undoped_threshold
+        - donor_concentration / settings.n_per_v
+    )
     vg = _gate_values(config)
     current_a = id_model(
         vg,
@@ -155,8 +162,7 @@ def python_curve(workflow: MobilityWorkflow) -> Tuple[np.ndarray, np.ndarray]:
         mu_c0,
         mu_ph,
         alpha,
-        n_ref=n_ref,
-        mu_min=mu_min,
+        settings,
     ) * 1e-9
     return vg, current_a
 

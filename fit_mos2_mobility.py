@@ -1,204 +1,437 @@
 #!/usr/bin/env python3
-"""
-Fit a density-dependent mobility model to the experimental MoS2 Id(Vg) curve
-(Figure 4 of the MoS2-FET repo's Report.pdf, monolayer, Vd = 50 mV).
+"""Compare the configured compact Python model against a COMSOL Id(Vg) export.
 
-WHY
----
-The repo's COMSOL model uses a constant mobility, so Id(Vg) comes out linear
-above threshold. The experiment is roughly parabolic (Id ~ (Vg - Vt)^2),
-which is what you expect when Coulomb scattering from charged impurities
-weakens as gate-induced carriers screen it, so mobility rises with density.
-
-THE MODEL (above threshold, low Vd, uniform channel)
-----------------------------------------------------
-    dV      = Vg - Vt                          gate overdrive
-    n       = (Cox / (q * t_MoS2)) * dV        3D electron density in the layer
-    mu_C    = mu_C0 * (n / n_ref)**alpha       Coulomb-limited mobility
-    mu_eff  = 1 / (1/mu_C + 1/mu_ph)           Matthiessen's rule (phonon cap)
-    Id      = G * (mu_eff / 100) * dV          linear-regime drain current
-
-G (nA/V at mu = 100 cm^2/Vs) is calibrated from the COMSOL model itself: a run
-with constant mobility 100 cm^2/Vs gave a slope of 148 nA/V (the ideal formula
-mu*Cox*(W/L)*Vd gives 112; the extra ~1.3x is geometry in the 2D model).
-With this calibration the model predicted the COMSOL alpha=1 run within ~5%.
-
-Free parameters: Vt, mu_C0 (mobility at n_ref), mu_ph, alpha.
-n_ref is fixed (1e19 cm^-3) because it is degenerate with mu_C0.
-Only Vg >= 6 V is fitted: the 0-6 V tail (1-9 nA) is subthreshold/trap
-behaviour that this model does not describe.
-
-KNOWN LIMITS
-------------
-* alpha and Vt trade off: alpha=1 with Vt~+2.6 V and alpha=2 with Vt~-0.8 V
-  fit about equally well. The script prints both. alpha=2 needs much less
-  change to the device (see nd_for_vt).
-* Threshold vs doping, measured from COMSOL constant-mobility runs:
-  Vt = VT0 - Nd * t_MoS2 * q / Cox, with VT0 ~ -0.80 V.
-* In COMSOL, a floor on mu (mu_min ~ 1 cm^2/Vs) was needed so the thin region
-  next to each contact (where n is tiny) does not dominate the resistance.
-
-USAGE
------
-    python fit_mos2_mobility.py                 # uses the embedded data
-    python fit_mos2_mobility.py --pdf Report.pdf  # re-digitize Figure 4
-Needs numpy, scipy, matplotlib (and Pillow + poppler's pdftoppm for --pdf).
+All model inputs come from the Markdown configuration and remain fixed. The
+reported errors measure agreement with the COMSOL curve, not physical accuracy
+against experimental data. The compact model approximates carrier density
+from gate overdrive; it does not resolve COMSOL's spatial semiconductor fields.
 """
 import argparse
-import subprocess
+import csv
+from dataclasses import dataclass
+import math
+from pathlib import Path
+from typing import Any, Dict, Mapping, Sequence
 
 import numpy as np
-from scipy.optimize import least_squares
 
 # ----------------------------------------------------------------------------
-# Device constants (monolayer model, MoS2_ML.mph)
-# ----------------------------------------------------------------------------
-Q = 1.602e-19             # C
-EPS0 = 8.854e-14          # F/cm
-COX = EPS0 * 3.9 / 300e-7  # F/cm^2, 300 nm SiO2
-T_MOS2 = 0.7e-7           # cm
-N_PER_V = COX / (Q * T_MOS2)  # cm^-3 per volt of overdrive (~1.03e18)
-G_CAL = 148.0             # nA/V at mu = 100 cm^2/Vs (from COMSOL)
-N_REF = 1e19              # cm^-3, fixed reference density
-VT0 = -0.80               # V, threshold of an undoped channel
-FIT_FROM_VG = 6.0         # V, fit only above this gate voltage
+# Universal constants, not device-specific configuration.
+Q = 1.602e-19
+EPS0 = 8.854e-14
 
-# Experimental curve digitized from Report.pdf, Figure 4 (Vg in V, Id in nA)
-EXP = np.array([
-    (0, 1.1), (0.5, 1.8), (1, 2.2), (1.5, 2.8), (2, 3.2), (2.5, 3.8), (3, 4.2),
-    (3.5, 4.9), (4, 5.5), (4.5, 5.9), (5, 6.9), (5.5, 7.9), (6, 9), (6.5, 10.2),
-    (7, 11.9), (7.5, 13.3), (8, 15.3), (8.5, 17.5), (9, 21), (9.5, 24.8),
-    (10, 29), (10.5, 33.1), (11, 38.1), (11.5, 42.4), (12, 47.2), (12.5, 51.9),
-    (13, 56.5), (13.5, 62), (14, 68.6), (14.5, 74.6), (15, 80.2), (15.5, 86.6),
-    (16, 95.3), (16.5, 101.9), (17, 110.3), (17.5, 117.6), (18, 126.9),
-    (18.5, 134.3), (19, 143.8), (19.5, 153.5), (20, 160.5)])
 
+@dataclass(frozen=True)
+class MobilityModelSettings:
+    """Device-specific constants used by the compact mobility model."""
+
+    n_per_v: float
+    current_scale: float
+    undoped_threshold: float
+    n_ref: float
+    mu_min: float
+
+
+def _numeric_parameter(
+    parameters: Sequence[Mapping[str, Any]],
+    name: str,
+) -> float:
+    for parameter in parameters:
+        if parameter["name"] == name:
+            value = parameter["value"]
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError(f"COMSOL parameter '{name}' must be numeric.")
+            if not math.isfinite(value):
+                raise ValueError(f"COMSOL parameter '{name}' must be finite.")
+            return float(value)
+    raise ValueError(f"Required COMSOL parameter '{name}' is not configured.")
+
+
+def _length_in_cm(parameter: Mapping[str, Any]) -> float:
+    unit = str(parameter.get("unit", "")).strip().lower()
+    conversion = {
+        "m": 100.0,
+        "cm": 1.0,
+        "mm": 0.1,
+        "um": 1e-4,
+        "µm": 1e-4,
+        "nm": 1e-7,
+    }
+    if unit not in conversion:
+        raise ValueError(
+            f"Unsupported length unit {unit!r} for COMSOL parameter "
+            f"'{parameter['name']}'."
+        )
+    value = parameter["value"]
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(
+            f"COMSOL parameter '{parameter['name']}' must be numeric."
+        )
+    result = float(value) * conversion[unit]
+    if not math.isfinite(result) or result <= 0:
+        raise ValueError(
+            f"COMSOL parameter '{parameter['name']}' must be finite and "
+            "greater than zero."
+        )
+    return result
+
+
+def _preview_number(preview: Mapping[str, Any], name: str) -> float:
+    value = preview.get(name)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"Python Preview value '{name}' must be numeric.")
+    if not math.isfinite(value):
+        raise ValueError(f"Python Preview value '{name}' must be finite.")
+    return float(value)
+
+
+def _configured_length_cm(
+    parameters: Mapping[str, Mapping[str, Any]],
+    parameter_name: str,
+    preview: Mapping[str, Any],
+    fallback_name: str,
+) -> float:
+    if parameter_name in parameters:
+        return _length_in_cm(parameters[parameter_name])
+    return _preview_number(preview, fallback_name) * 1e-4
+
+
+def build_model_settings(
+    config: Mapping[str, Any],
+    preview: Mapping[str, Any],
+) -> MobilityModelSettings:
+    """Derive compact-model constants from COMSOL parameters and preview data."""
+    parameters = config["parameters"]
+    parameter_by_name = {item["name"]: item for item in parameters}
+    oxide_permittivity = _preview_number(
+        preview, "oxide_relative_permittivity"
+    )
+    calibration = _preview_number(
+        preview, "current_calibration_nA_per_V_at_100_mobility"
+    )
+    calibration_vd = _preview_number(preview, "calibration_drain_voltage")
+    undoped_threshold = _preview_number(
+        preview, "undoped_threshold_voltage"
+    )
+
+    n_ref = _numeric_parameter(parameters, "n_ref")
+    mu_min = _numeric_parameter(parameters, "mu_min")
+    channel_thickness = (
+        _length_in_cm(parameter_by_name["t_MoS2"])
+        if "t_MoS2" in parameter_by_name
+        else _preview_number(preview, "channel_thickness_nm") * 1e-7
+    )
+    oxide_thickness = (
+        _length_in_cm(parameter_by_name["t_SiO2"])
+        if "t_SiO2" in parameter_by_name
+        else _preview_number(preview, "oxide_thickness_nm") * 1e-7
+    )
+    drain_voltage = (
+        _numeric_parameter(parameters, "Vd")
+        if "Vd" in parameter_by_name
+        else _preview_number(preview, "drain_voltage_v")
+    )
+    channel_width = _configured_length_cm(
+        parameter_by_name,
+        "W",
+        preview,
+        "channel_width_um",
+    )
+    channel_length = _configured_length_cm(
+        parameter_by_name,
+        "L_MoS2",
+        preview,
+        "channel_length_um",
+    )
+    calibration_width = _preview_number(preview, "calibration_width_um") * 1e-4
+    calibration_length = (
+        _preview_number(preview, "calibration_length_um") * 1e-4
+    )
+    if (
+        not math.isfinite(oxide_permittivity)
+        or oxide_permittivity <= 0
+        or not math.isfinite(calibration)
+        or calibration <= 0
+        or not math.isfinite(calibration_vd)
+        or calibration_vd <= 0
+        or not math.isfinite(undoped_threshold)
+        or not math.isfinite(drain_voltage)
+        or drain_voltage <= 0
+        or n_ref <= 0
+        or mu_min < 0
+        or channel_thickness <= 0
+        or oxide_thickness <= 0
+        or channel_width <= 0
+        or channel_length <= 0
+        or calibration_width <= 0
+        or calibration_length <= 0
+    ):
+        raise ValueError("Python Preview/model mobility settings are invalid.")
+
+    oxide_capacitance = (
+        EPS0
+        * oxide_permittivity
+        / oxide_thickness
+    )
+    n_per_v = oxide_capacitance / (Q * channel_thickness)
+    return MobilityModelSettings(
+        n_per_v=n_per_v,
+        current_scale=(
+            calibration
+            * drain_voltage
+            / calibration_vd
+            * (channel_width / channel_length)
+            / (calibration_width / calibration_length)
+        ),
+        undoped_threshold=undoped_threshold,
+        n_ref=n_ref,
+        mu_min=mu_min,
+    )
 
 # ----------------------------------------------------------------------------
 # Model
 # ----------------------------------------------------------------------------
-def mu_eff(n, mu_c0, alpha, mu_ph, mu_min=0.0, n_ref=N_REF):
-    """Mobility (cm^2/Vs) at 3D density n (cm^-3). Same form as the COMSOL
-    variable: 1/(1/max(mu_C0*(n/n_ref)^alpha, mu_min) + 1/mu_ph)."""
-    mu_c = np.maximum(mu_c0 * (n / n_ref) ** alpha, mu_min)
+def mu_eff(
+    n,
+    mu_c0,
+    alpha,
+    mu_ph,
+    settings: MobilityModelSettings,
+):
+    """COMSOL mu_ele: add the floor to Coulomb mobility, then apply Matthiessen."""
+    density = np.maximum(np.asarray(n, dtype=float), 1.0)
+    mu_c = mu_c0 * (density / settings.n_ref) ** alpha + settings.mu_min
     return 1.0 / (1.0 / mu_c + 1.0 / mu_ph)
 
 
-def id_model(vg, vt, mu_c0, mu_ph, alpha, n_ref=N_REF, mu_min=0.0):
-    """Drain current (nA) at Vd = 50 mV for gate voltage vg (V)."""
+def id_model(
+    vg,
+    vt,
+    mu_c0,
+    mu_ph,
+    alpha,
+    settings: MobilityModelSettings,
+):
+    """Drain current (nA) from the configured compact linear-regime model."""
     vg = np.asarray(vg, float)
     dv = np.clip(vg - vt, 1e-9, None)
-    mu = mu_eff(N_PER_V * dv, mu_c0, alpha, mu_ph, mu_min, n_ref)
-    return np.where(vg > vt, G_CAL * mu / 100.0 * dv, 0.0)
+    mu = mu_eff(settings.n_per_v * dv, mu_c0, alpha, mu_ph, settings)
+    return np.where(vg > vt, settings.current_scale * mu / 100.0 * dv, 0.0)
 
 
-def nd_for_vt(vt):
-    """Donor concentration (cm^-3) that puts the threshold at vt (V)."""
-    return max((VT0 - vt) * COX / (Q * T_MOS2), 0.0)
+def nd_for_vt(vt, settings: MobilityModelSettings):
+    """Signed net doping (cm^-3) corresponding to threshold voltage vt."""
+    return (settings.undoped_threshold - vt) * settings.n_per_v
 
 
-# ----------------------------------------------------------------------------
-# Fitting
-# ----------------------------------------------------------------------------
-def fit(vg, i, alpha=None):
-    """Multi-start least squares. alpha=None fits alpha too."""
-    free_alpha = alpha is None
-    lo = [-10, 0.05, 5] + ([0.0] if free_alpha else [])
-    hi = [10, 500, 3000] + ([4.0] if free_alpha else [])
-    best = None
-    for vt0 in (-2, 0, 2, 4):
-        for m0 in (3, 10, 30):
-            for mp in (50, 150, 500):
-                x0 = [vt0, m0, mp] + ([1.0] if free_alpha else [])
+def configured_model_curve(
+    vg: Sequence[float],
+    config: Mapping[str, Any],
+    preview: Mapping[str, Any],
+) -> np.ndarray:
+    """Predict current in nA using only the configured Markdown parameters."""
+    parameters = config["parameters"]
+    donor_name = preview["donor_parameter"]
+    donor_concentration = _numeric_parameter(parameters, donor_name)
+    alpha = _numeric_parameter(parameters, "alpha_mu")
+    mu_c0 = _numeric_parameter(parameters, "mu_C0")
+    mu_ph = _numeric_parameter(parameters, "mu_ph")
+    settings = build_model_settings(config, preview)
 
-                def resid(p):
-                    a = p[3] if free_alpha else alpha
-                    return id_model(vg, p[0], p[1], p[2], a) - i
+    if donor_concentration < 0:
+        raise ValueError("Donor concentration cannot be negative.")
+    if alpha < 0 or mu_c0 <= 0 or mu_ph <= 0:
+        raise ValueError(
+            "Mobility settings require alpha_mu >= 0 and mu_C0, mu_ph > 0."
+        )
 
-                r = least_squares(resid, x0, bounds=(lo, hi))
-                if best is None or r.cost < best.cost:
-                    best = r
-    p = list(best.x) + ([] if free_alpha else [alpha])
-    rms = float(np.sqrt(2 * best.cost / len(vg)))
-    return dict(vt=p[0], mu_c0=p[1], mu_ph=p[2], alpha=p[3], rms=rms)
-
-
-# ----------------------------------------------------------------------------
-# Optional: re-digitize Figure 4 from the PDF (page 7, rendered at 400 dpi)
-# ----------------------------------------------------------------------------
-def digitize_pdf(pdf, page=7, dpi=400):
-    from PIL import Image
-    subprocess.run(["pdftoppm", "-r", str(dpi), "-f", str(page), "-l", str(page),
-                    "-png", pdf, "_fig"], check=True)
-    png = f"_fig-{page:02d}.png"
-    a = np.asarray(Image.open(png).convert("RGB")).astype(int)
-    # axes frame of Figure 4 in the 400 dpi render: Vg -20..20, Id 0..250 nA
-    xl, xr, yt, yb = 960.0, 2469.0, 2366.5, 3577.5
-    x0 = int(xl + 17 / 40 * (xr - xl))            # keep Vg >= -3 (skip legend)
-    sub = a[int(yt):int(yb) + 1, x0:int(xr)]
-    mask = np.abs(sub - np.array([126, 47, 142])).sum(axis=2) < 90  # purple
-    ys, xs = np.nonzero(mask)
-    vg = -20 + (xs + x0 - xl) / (xr - xl) * 40
-    idn = (yb - (ys + int(yt))) / (yb - yt) * 250
-    out = {}
-    for v, c in zip(np.round(vg * 2) / 2, idn):   # bin to 0.5 V, take median
-        out.setdefault(v, []).append(c)
-    return np.array([(v, np.median(c)) for v, c in sorted(out.items()) if v >= 0])
+    vt = settings.undoped_threshold - donor_concentration / settings.n_per_v
+    return id_model(vg, vt, mu_c0, mu_ph, alpha, settings)
 
 
-# ----------------------------------------------------------------------------
+def read_comsol_curve(
+    filename: Path,
+    evaluation: Mapping[str, Any],
+) -> tuple[np.ndarray, np.ndarray]:
+    """Read gate voltage (V) and drain current (A) from a COMSOL CSV export."""
+    if evaluation.get("x_unit") != "V" or evaluation.get("y_unit") != "A":
+        raise ValueError("COMSOL comparison requires voltage in V and current in A.")
+
+    x_column = evaluation["x_column"]
+    y_column = evaluation["y_column"]
+    voltages = []
+    currents = []
+    with filename.open(newline="", encoding="utf-8") as curve_file:
+        reader = csv.DictReader(curve_file)
+        if reader.fieldnames is None or any(
+            column not in reader.fieldnames for column in (x_column, y_column)
+        ):
+            raise ValueError(
+                f"COMSOL curve '{filename}' is missing columns "
+                f"{x_column!r} and/or {y_column!r}."
+            )
+        for line_number, row in enumerate(reader, start=2):
+            try:
+                voltage = float(row[x_column])
+                current = float(row[y_column])
+            except (TypeError, ValueError) as error:
+                raise ValueError(
+                    f"Invalid numeric COMSOL data at {filename}:{line_number}."
+                ) from error
+            if not math.isfinite(voltage) or not math.isfinite(current):
+                raise ValueError(
+                    f"Non-finite COMSOL data at {filename}:{line_number}."
+                )
+            voltages.append(voltage)
+            currents.append(current)
+
+    if not voltages:
+        raise ValueError(f"COMSOL curve '{filename}' contains no data rows.")
+    return np.asarray(voltages), np.asarray(currents)
+
+
+def comparison_metrics(
+    comsol_current_na: Sequence[float],
+    model_current_na: Sequence[float],
+) -> Dict[str, float]:
+    """Return fixed-model errors against COMSOL current, in nA."""
+    target = np.asarray(comsol_current_na, dtype=float)
+    predicted = np.asarray(model_current_na, dtype=float)
+    if target.shape != predicted.shape or target.size == 0:
+        raise ValueError("COMSOL and Python curves must have matching data points.")
+    if not np.all(np.isfinite(target)) or not np.all(np.isfinite(predicted)):
+        raise ValueError("COMSOL and Python curves must contain finite values.")
+
+    errors = predicted - target
+    target_range = float(np.ptp(target))
+    if target_range == 0:
+        raise ValueError(
+            "Cannot calculate normalized error or R-squared for a constant "
+            "COMSOL current curve."
+        )
+    rmse = float(np.sqrt(np.mean(errors**2)))
+    total_variation = float(np.sum((target - np.mean(target)) ** 2))
+    return {
+        "mae_na": float(np.mean(np.abs(errors))),
+        "rmse_na": rmse,
+        "max_abs_error_na": float(np.max(np.abs(errors))),
+        "nrmse_percent": rmse / target_range * 100,
+        "r_squared": 1 - float(np.sum(errors**2)) / total_variation,
+    }
+
+
+def compare_to_comsol(
+    filename: Path,
+    evaluation: Mapping[str, Any],
+    config: Mapping[str, Any],
+    preview: Mapping[str, Any],
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, Dict[str, float]]:
+    """Compare fixed Markdown parameters with a COMSOL-exported curve."""
+    vg, comsol_current_a = read_comsol_curve(filename, evaluation)
+    model_current_na = configured_model_curve(vg, config, preview)
+    comsol_current_na = comsol_current_a * 1e9
+    metrics = comparison_metrics(comsol_current_na, model_current_na)
+    return vg, comsol_current_na, model_current_na, metrics
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--pdf", help="Report.pdf: re-digitize Figure 4 instead of "
-                                  "using the embedded points")
-    ap.add_argument("--plot", default="mos2_idvg_fit.png")
+    ap.add_argument(
+        "--config",
+        default="mobility_parameters_MoS2.md",
+        help="Markdown mobility configuration.",
+    )
+    ap.add_argument(
+        "--comsol-csv",
+        help=(
+            "COMSOL evaluation CSV. Defaults to the configured CSV path for "
+            "the id_vg evaluation."
+        ),
+    )
+    ap.add_argument(
+        "--evaluation",
+        default="id_vg",
+        help="Name of the configured evaluation to compare (default: id_vg).",
+    )
+    ap.add_argument(
+        "--plot",
+        help="Comparison plot path (defaults beside the COMSOL CSV).",
+    )
     args = ap.parse_args()
 
-    data = digitize_pdf(args.pdf) if args.pdf else EXP
-    vg, i = data[:, 0], data[:, 1]
-    m = vg >= FIT_FROM_VG
+    from comsol_mobility_run import load_workflow
+    from comsol_run import evaluation_csv_paths
 
-    fits = {"alpha free": fit(vg[m], i[m]),
-            "alpha = 2": fit(vg[m], i[m], 2.0),
-            "alpha = 1": fit(vg[m], i[m], 1.0)}
-
-    print(f"Fitting {m.sum()} points, Vg >= {FIT_FROM_VG} V\n")
-    for name, f in fits.items():
-        cap = "  (at upper bound: no phonon cap needed)" if f["mu_ph"] > 2990 else ""
-        print(f"{name:11s} Vt={f['vt']:6.2f} V  mu_C0={f['mu_c0']:6.2f}  "
-              f"mu_ph={f['mu_ph']:7.1f}  alpha={f['alpha']:4.2f}  "
-              f"RMS={f['rms']:.2f} nA{cap}")
-
-    f = fits["alpha = 2"]
-    print("\nCOMSOL parameters for the alpha = 2 fit (n_ref fixed at 1e19):")
-    print(f"  alpha_mu 2\n  mu_C0    {f['mu_c0']:.2f}[cm^2/(V*s)]\n"
-          f"  mu_ph    {f['mu_ph']:.1f}[cm^2/(V*s)]\n  n_ref    1e19[1/cm^3]\n"
-          f"  mu_min   1[cm^2/(V*s)]   (contact-region floor; see docstring)")
-    print(f"  donor_concentration ~ {nd_for_vt(f['vt']):.0e}[1/cm^3] to put Vt "
-          f"near {f['vt']:.2f} V (+/- {0.1 * N_PER_V:.0e} for a +/-0.1 V "
-          f"uncertainty in Vt, so 'nearly undoped')")
-    print("  mu_ele = 1/(1/max(mu_C0*(max(semi.N,1[1/cm^3])/n_ref)^alpha_mu,"
-          "mu_min)+1/mu_ph)")
+    workflow = load_workflow(args.config)
+    config = workflow.config
+    evaluation = next(
+        (
+            item
+            for item in config["evaluations"]
+            if item["name"] == args.evaluation
+        ),
+        None,
+    )
+    if evaluation is None:
+        raise ValueError(
+            f"Evaluation '{args.evaluation}' is not configured in {args.config}."
+        )
+    configured_csv = evaluation_csv_paths(
+        config["model"]["evaluation_csv"],
+        config["evaluations"],
+    )[args.evaluation]
+    csv_path = Path(args.comsol_csv or configured_csv)
+    vg, comsol_current, model_current, metrics = compare_to_comsol(
+        csv_path,
+        evaluation,
+        config,
+        workflow.preview,
+    )
+    plot_path = Path(
+        args.plot
+        or csv_path.with_name(f"{csv_path.stem}_model_comparison.png")
+    )
 
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    v = np.linspace(-2, 20, 300)
-    fig, ax = plt.subplots(figsize=(6.2, 4.6))
-    ax.plot(vg, i, ".", color="purple", label="Experimental (digitized)")
-    for (name, f), st in zip(fits.items(), ("k-", "b--", "g:")):
-        ax.plot(v, id_model(v, f["vt"], f["mu_c0"], f["mu_ph"], f["alpha"]), st,
-                label=f"{name}: Vt={f['vt']:.2f} V, RMS {f['rms']:.2f} nA")
-    ax.axvline(FIT_FROM_VG, color="0.8", lw=0.8)
-    ax.set_xlim(-2, 20)
-    ax.set_ylim(0, 200)
+    order = np.argsort(vg)
+    fig, ax = plt.subplots(figsize=(7.2, 5.2))
+    ax.plot(
+        vg[order],
+        comsol_current[order],
+        "o",
+        markersize=3,
+        label="COMSOL",
+    )
+    ax.plot(
+        vg[order],
+        model_current[order],
+        "-",
+        label="Python model (Markdown parameters)",
+    )
     ax.set_xlabel("Vg (V)")
     ax.set_ylabel("Id (nA)")
-    ax.legend(fontsize=7, loc="upper left")
+    ax.set_title("Fixed-parameter model vs COMSOL")
+    ax.legend()
     ax.grid(alpha=0.3)
     fig.tight_layout()
-    fig.savefig(args.plot, dpi=150)
-    print(f"\nPlot saved to {args.plot}")
+    plot_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(plot_path, dpi=150)
+    plt.close(fig)
+
+    print(f"Compared {len(vg)} COMSOL points from {csv_path}")
+    print(f"Markdown configuration: {args.config}")
+    print(f"MAE: {metrics['mae_na']:.4g} nA")
+    print(f"RMSE: {metrics['rmse_na']:.4g} nA")
+    print(f"Maximum absolute error: {metrics['max_abs_error_na']:.4g} nA")
+    print(f"NRMSE (COMSOL current range): {metrics['nrmse_percent']:.3g}%")
+    print(f"R-squared: {metrics['r_squared']:.6g}")
+    print(
+        "These metrics measure agreement with the compact Python model; "
+        "they do not establish physical accuracy against experiment."
+    )
+    print(f"Comparison plot saved to {plot_path}")
 
 
 if __name__ == "__main__":

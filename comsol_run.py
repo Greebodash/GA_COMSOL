@@ -2,9 +2,11 @@
 
 import csv
 from datetime import datetime
+import json
 import logging
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -60,6 +62,7 @@ def parse_markdown_config(filename):
 
     config = {"model": {}, "parameters": [], "evaluations": []}
     section = None
+    parameter_columns = None
 
     with open(filename, "r", encoding="utf-8") as config_file:
         for raw_line in config_file:
@@ -94,24 +97,85 @@ def parse_markdown_config(filename):
 
             if section == "parameters" and line.startswith("|"):
                 cells = [cell.strip() for cell in line.strip("|").split("|")]
-                if not cells or cells[0].lower() == "name":
+                if not cells:
+                    continue
+                if cells[0].lower() == "name":
+                    parameter_columns = [
+                        cell.strip().lower() for cell in cells
+                    ]
+                    if not {"name", "value", "unit"} <= set(parameter_columns):
+                        raise ValueError(
+                            "COMSOL parameter table must include name, value, "
+                            "and unit columns."
+                        )
                     continue
                 if all(set(cell) <= set("-:") for cell in cells):
                     continue
-                if len(cells) != 3:
+                if parameter_columns is None:
+                    if len(cells) == 3:
+                        parameter_data = dict(
+                            zip(("name", "value", "unit"), cells)
+                        )
+                    elif len(cells) == 4 and cells[3].startswith("#"):
+                        parameter_data = dict(
+                            zip(("name", "value", "unit"), cells[:3])
+                        )
+                        parameter_data["description"] = cells[3]
+                    else:
+                        raise ValueError(
+                            "COMSOL parameter rows without a header must "
+                            "contain name, value, unit, and optionally a "
+                            "comment."
+                        )
+                elif len(cells) == len(parameter_columns):
+                    parameter_data = dict(zip(parameter_columns, cells))
+                elif (
+                    len(parameter_columns) > len(cells) >= 3
+                    and {"name", "value", "unit"} <= set(parameter_columns)
+                ):
+                    parameter_data = dict(
+                        zip(
+                            parameter_columns,
+                            cells + [""] * (len(parameter_columns) - len(cells)),
+                        )
+                    )
+                elif (
+                    len(cells) == len(parameter_columns) + 1
+                    and cells[-1].startswith("#")
+                    and {"name", "value", "unit"} <= set(parameter_columns)
+                ):
+                    parameter_data = dict(
+                        zip(parameter_columns, cells[:-1])
+                    )
+                    parameter_data["description"] = cells[-1]
+                else:
                     raise ValueError(
-                        "COMSOL parameter table must contain exactly "
-                        "3 columns: name, value, unit."
+                        "COMSOL parameter row does not match its table "
+                        "header."
                     )
 
-                name, value, unit = cells
-                config["parameters"].append(
-                    {
-                        "name": name,
-                        "value": parse_value(value),
-                        "unit": unit,
-                    }
-                )
+                parameter = {
+                    "name": parameter_data["name"],
+                    "value": parse_value(parameter_data["value"]),
+                    "unit": parameter_data["unit"],
+                }
+                category = parameter_data.get(
+                    "category", parameter_data.get("group", "")
+                ).strip()
+                if category:
+                    parameter["category"] = category
+                description = parameter_data.get(
+                    "description",
+                    parameter_data.get(
+                        "help",
+                        parameter_data.get("comment", ""),
+                    ),
+                ).strip()
+                if description.startswith("#"):
+                    description = description[1:].strip()
+                if description:
+                    parameter["description"] = description
+                config["parameters"].append(parameter)
 
             if section == "evaluations" and line.startswith("|"):
                 cells = [cell.strip() for cell in line.strip("|").split("|")]
@@ -366,8 +430,22 @@ def run_config(config):
     finally:
         if client is not None:
             client.clear()
-            client.disconnect()
-            logger.info("COMSOL backend disconnected.")
+            logger.info("COMSOL models cleared.")
+
+
+def run_config_in_subprocess(config):
+    """Run COMSOL in a fresh process, isolated from caller thread state."""
+    worker = (
+        "import json, sys; "
+        "import comsol_run; "
+        "comsol_run.run_config(json.load(sys.stdin))"
+    )
+    subprocess.run(
+        [sys.executable, "-c", worker],
+        input=json.dumps(config),
+        text=True,
+        check=True,
+    )
 
 
 if __name__ == "__main__":

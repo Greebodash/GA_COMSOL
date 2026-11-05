@@ -28,6 +28,9 @@ class ComsolMobilityRunTests(unittest.TestCase):
                 "n_ref",
                 "mu_min",
                 "donor_concentration",
+                "Vg_start",
+                "Vg_step",
+                "Vg_finish",
             ],
         )
         self.assertEqual(
@@ -35,7 +38,7 @@ class ComsolMobilityRunTests(unittest.TestCase):
             "donor_concentration",
         )
         self.assertEqual(
-            comsol_mobility_run._gate_values(workflow.sweep).tolist(),
+            comsol_mobility_run._gate_values(workflow.config).tolist(),
             [index / 2 for index in range(41)],
         )
 
