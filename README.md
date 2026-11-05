@@ -1,8 +1,7 @@
 # COMSOL MoS₂ FET electrical workflows
 
-Python tools for running the bottom-gate monolayer and four-layer MoS₂
-semiconductor models from the [MoS2-FET repository](https://github.com/MatteoOrlandini/MoS2-FET)
-and exporting their drain-current output and transfer curves.
+Python tools for running COMSOL semiconductor models and exporting their
+drain-current output and transfer curves.
 
 ## Project layout
 
@@ -21,18 +20,9 @@ and exporting their drain-current output and transfer curves.
     └── comsol_utils.py        # COMSOL solution and evaluation helpers
 ```
 
-COMSOL `.mph` files are not included. Download one or both bottom-gate models
-from the source project and place them in `models/`:
-
-- [Monolayer MoS₂ FET with bottom gate](https://github.com/MatteoOrlandini/MoS2-FET/blob/master/MoS2%20monolayer%20FET%20with%20bottom%20gate.mph)
-- [Four-layer MoS₂ FET with bottom gate](https://github.com/MatteoOrlandini/MoS2-FET/blob/master/MoS2%204%20Layer%20FET%20with%20bottom%20gate.mph)
-
-The linked [report](https://github.com/MatteoOrlandini/MoS2-FET/blob/master/Report.pdf)
-describes the semiconductor models and example results. It reports monolayer
-output curves at `Vg = 10 V` and transfer curves at `Vd = 0.05 V`, and
-four-layer output curves at `Vg = 0.1 V` and transfer curves at `Vd = 0.01 V`.
-The COMSOL studies and parametric sweep values saved in each model determine
-the actual operating points used by a run.
+COMSOL `.mph` files are not included. Set the model path and evaluations in
+the relevant configuration file to match the model available in your
+installation.
 
 ## Requirements
 
@@ -54,17 +44,6 @@ root:
 ```bash
 conda run -n mp python comsol_run.py
 ```
-
-The local configuration solves `models/MoS2_ML.mph` and exports its transfer
-curve to `results/mos2_ml_id_vg.csv` (`bias_voltage_v` is `Vg` and
-`drain_current_a` is the terminal current).
-
-The configured MPh dataset name (`Id(Vg)//Parametric Solutions 2`) and
-expressions (`Vg`, `semi.I0_1`) were confirmed against the supplied model by
-loading and evaluating it in the `mp` Conda environment. COMSOL's internal
-dataset tags are not the names MPh expects for this lookup. If the local model
-has different dataset names or expressions, update the evaluation table
-accordingly.
 
 The standard runner follows the `solve_model` setting in
 [`comsol_parameters.md`](comsol_parameters.md). The mobility workflow described
@@ -98,12 +77,11 @@ conda run -n mp python comsol_mobility_run.py \
   --config mobility_parameters_MoS2.md
 ```
 
-The workflow explicitly requires `solve_model: true`, writes the solved model
-to `models/MoS2_ML_mobility_out.mph`, exports its transfer curve to
-`results/mos2_ml_mobility_id_vg.csv`, and saves the comparison plot to
-`results/mos2_ml_mobility_curves.png`. The Python preview uses the compact
-mobility/current model in `fit_mos2_mobility.py`; the COMSOL curve comes from
-the configured `Id(Vg)` dataset and is the simulation output.
+The workflow explicitly requires `solve_model: true` and saves the solved
+model, exported curves, and comparison plot to the paths configured in the
+mobility Markdown file. The Python preview uses the compact mobility/current
+model in `fit_mos2_mobility.py`; the COMSOL curve comes from the configured
+`Id(Vg)` dataset and is the simulation output.
 
 ## Streamlit interface
 
